@@ -1,0 +1,35 @@
+name: Twitter Screenshot Bot
+
+on:
+  schedule:
+    # Runs every 12 hours (at 00:00 and 12:00 UTC)
+    - cron: '0 0,12 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        playwright install chromium
+        playwright install-deps
+    
+    - name: Run Twitter Screenshot Bot
+      env:
+        TWITTER_HANDLE: ${{ secrets.TWITTER_HANDLE }}
+        YOUR_EMAIL: ${{ secrets.YOUR_EMAIL }}
+        YOUR_EMAIL_PASSWORD: ${{ secrets.YOUR_EMAIL_PASSWORD }}
+        APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
+      run: python twitter_screenshot_bot.py
