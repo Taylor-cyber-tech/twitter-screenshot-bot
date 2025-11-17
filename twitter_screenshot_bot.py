@@ -46,19 +46,42 @@ def get_recent_tweets(username, hours=12):
         response.raise_for_status()
         tweets = response.json()
         
+        print(f"Raw response received: {len(tweets)} tweets")
+        
         # Filter tweets by time
         recent_tweets = []
         for tweet in tweets:
-            tweet_time = datetime.strptime(tweet.get('createdAt', ''), '%a %b %d %H:%M:%S %z %Y')
+            # Try to parse the date - handle multiple formats
+            created_at = tweet.get('createdAt', '')
+            tweet_time = None
+            
+            if created_at:
+                try:
+                    # Try standard Twitter format first
+                    tweet_time = datetime.strptime(created_at, '%a %b %d %H:%M:%S %z %Y')
+                except:
+                    try:
+                        # Try ISO format
+                        from dateutil import parser
+                        tweet_time = parser.parse(created_at)
+                    except:
+                        # If all else fails, include the tweet (better to send than miss)
+                        print(f"Warning: Could not parse date '{created_at}', including tweet anyway")
+                        tweet_time = datetime.utcnow()
+            else:
+                # No date provided, include it
+                tweet_time = datetime.utcnow()
+            
             # Remove timezone info for comparison
-            tweet_time = tweet_time.replace(tzinfo=None)
+            if tweet_time.tzinfo:
+                tweet_time = tweet_time.replace(tzinfo=None)
             
             if tweet_time >= time_threshold:
                 recent_tweets.append({
                     'id': tweet.get('id'),
                     'text': tweet.get('text'),
                     'url': f"https://twitter.com/{username}/status/{tweet.get('id')}",
-                    'created_at': tweet.get('createdAt'),
+                    'created_at': created_at or 'Unknown',
                     'likes': tweet.get('likes', 0),
                     'retweets': tweet.get('retweets', 0)
                 })
