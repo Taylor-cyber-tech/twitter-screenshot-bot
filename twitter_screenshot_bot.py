@@ -1,97 +1,122 @@
 import os
 import smtplib
-import json
 import time
+import re
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 import requests
+from bs4 import BeautifulSoup
 
 # Configuration from environment variables
-TWITTER_HANDLE = os.environ.get('TWITTER_HANDLE', 'elonmusk')  # Default for testing
+TWITTER_HANDLE = os.environ.get('TWITTER_HANDLE', 'elonmusk')
 YOUR_EMAIL = os.environ.get('YOUR_EMAIL')
-YOUR_EMAIL_PASSWORD = os.environ.get('YOUR_EMAIL_PASSWORD')  # Gmail App Password
-APIFY_API_TOKEN = os.environ.get('APIFY_API_TOKEN')
+YOUR_EMAIL_PASSWORD = os.environ.get('YOUR_EMAIL_PASSWORD')
 
-def get_recent_tweets(username, hours=12):
+# Nitter instances (public Twitter mirrors)
+NITTER_INSTANCES = [
+    'https://nitter.net',
+    'https://nitter.privacydev.net',
+    'https://nitter.poast.org',
+]
+
+def get_recent_tweets_from_nitter(username, hours=12):
     """
-    Fetch tweets from the last X hours using Apify Twitter Scraper
+    Scrape recent tweets from Nitter (Twitter mirror)
     """
-    print(f"Fetching tweets from @{username} in the last {hours} hours...")
+    print(f"Fetching tweets from @{username} via Nitter...")
     
-    # Apify Actor for Twitter scraping (free tier: 100 requests/month)
-    apify_url = "https://api.apify.com/v2/acts/apidojo~tweet-scraper/run-sync-get-dataset-items"
-    
-    # Calculate time threshold
+    tweets = []
     time_threshold = datetime.utcnow() - timedelta(hours=hours)
     
-    payload = {
-        "handles": [username],
-        "tweetsDesired": 50,  # Get more tweets to filter by time
-        "proxyConfig": {"useApifyProxy": True}
-    }
-    
-    headers = {
-        "Content-Type": "application/json"
-    }
-    
-    params = {
-        "token": APIFY_API_TOKEN
-    }
-    
-    try:
-        response = requests.post(apify_url, json=payload, headers=headers, params=params, timeout=120)
-        response.raise_for_status()
-        tweets = response.json()
-        
-        print(f"Raw response received: {len(tweets)} tweets")
-        
-        # Filter tweets by time
-        recent_tweets = []
-        for tweet in tweets:
-            # Try to parse the date - handle multiple formats
-            created_at = tweet.get('createdAt', '')
-            tweet_time = None
+    for nitter_url in NITTER_INSTANCES:
+        try:
+            print(f"Trying Nitter instance: {nitter_url}")
+            url = f"{nitter_url}/{username}"
             
-            if created_at:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Find all tweet containers
+            tweet_items = soup.find_all('div', class_='timeline-item')
+            
+            print(f"Found {len(tweet_items)} tweet items")
+            
+            for item in tweet_items:
                 try:
-                    # Try standard Twitter format first
-                    tweet_time = datetime.strptime(created_at, '%a %b %d %H:%M:%S %z %Y')
-                except:
-                    try:
-                        # Try ISO format
-                        from dateutil import parser
-                        tweet_time = parser.parse(created_at)
-                    except:
-                        # If all else fails, include the tweet (better to send than miss)
-                        print(f"Warning: Could not parse date '{created_at}', including tweet anyway")
+                    # Get tweet link
+                    link_elem = item.find('a', class_='tweet-link')
+                    if not link_elem:
+                        continue
+                    
+                    tweet_path = link_elem.get('href', '')
+                    if not tweet_path:
+                        continue
+                    
+                    # Extract tweet ID from path (format: /username/status/1234567890)
+                    match = re.search(r'/status/(\d+)', tweet_path)
+                    if not match:
+                        continue
+                    
+                    tweet_id = match.group(1)
+                    
+                    # Get tweet text
+                    tweet_content = item.find('div', class_='tweet-content')
+                    tweet_text = tweet_content.get_text(strip=True) if tweet_content else 'No text'
+                    
+                    # Get tweet date
+                    date_elem = item.find('span', class_='tweet-date')
+                    tweet_date = date_elem.get('title', '') if date_elem else ''
+                    
+                    # Try to parse date (Nitter uses various formats)
+                    tweet_time = None
+                    if tweet_date:
+                        try:
+                            # Try parsing ISO format
+                            tweet_time = datetime.fromisoformat(tweet_date.replace('Z', '+00:00'))
+                            tweet_time = tweet_time.replace(tzinfo=None)
+                        except:
+                            # If parsing fails, include tweet anyway
+                            tweet_time = datetime.utcnow()
+                    else:
                         tweet_time = datetime.utcnow()
+                    
+                    # Check if tweet is recent enough
+                    if tweet_time >= time_threshold:
+                        # Construct real Twitter URL
+                        twitter_url = f"https://x.com/{username}/status/{tweet_id}"
+                        
+                        tweets.append({
+                            'id': tweet_id,
+                            'text': tweet_text,
+                            'url': twitter_url,
+                            'created_at': tweet_date or 'Recent',
+                        })
+                
+                except Exception as e:
+                    print(f"Error parsing tweet: {e}")
+                    continue
+            
+            if tweets:
+                print(f"✅ Successfully fetched {len(tweets)} recent tweets")
+                return tweets
             else:
-                # No date provided, include it
-                tweet_time = datetime.utcnow()
-            
-            # Remove timezone info for comparison
-            if tweet_time.tzinfo:
-                tweet_time = tweet_time.replace(tzinfo=None)
-            
-            if tweet_time >= time_threshold:
-                recent_tweets.append({
-                    'id': tweet.get('id'),
-                    'text': tweet.get('text'),
-                    'url': f"https://twitter.com/{username}/status/{tweet.get('id')}",
-                    'created_at': created_at or 'Unknown',
-                    'likes': tweet.get('likes', 0),
-                    'retweets': tweet.get('retweets', 0)
-                })
-        
-        print(f"Found {len(recent_tweets)} tweets in the last {hours} hours")
-        return recent_tweets
-        
-    except Exception as e:
-        print(f"Error fetching tweets: {e}")
-        return []
+                print(f"No recent tweets found on this instance, trying next...")
+                
+        except Exception as e:
+            print(f"Error with {nitter_url}: {e}")
+            continue
+    
+    print(f"Found {len(tweets)} tweets total")
+    return tweets
 
 def take_screenshot(url, filename):
     """
@@ -102,30 +127,39 @@ def take_screenshot(url, filename):
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(viewport={'width': 1200, 'height': 800})
+            context = browser.new_context(
+                viewport={'width': 1200, 'height': 1400},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            )
             page = context.new_page()
             
             # Go to the tweet URL
             page.goto(url, wait_until='networkidle', timeout=30000)
             
             # Wait for tweet to load
-            time.sleep(3)
+            time.sleep(4)
             
-            # Try to find the tweet element and screenshot it
+            # Try to find and screenshot the tweet
             try:
-                # Twitter's article element contains the tweet
+                # Find the article element (tweet container)
                 tweet_element = page.locator('article').first
-                tweet_element.screenshot(path=filename)
+                if tweet_element:
+                    tweet_element.screenshot(path=filename)
+                    print(f"✅ Screenshot saved: {filename}")
+                else:
+                    # Fallback: screenshot visible area
+                    page.screenshot(path=filename, full_page=False)
+                    print(f"✅ Screenshot saved (fallback): {filename}")
             except:
-                # Fallback: screenshot the whole page
+                # Last resort: screenshot the page
                 page.screenshot(path=filename, full_page=False)
+                print(f"✅ Screenshot saved (page): {filename}")
             
             browser.close()
-            print(f"Screenshot saved: {filename}")
             return True
             
     except Exception as e:
-        print(f"Error taking screenshot: {e}")
+        print(f"❌ Error taking screenshot: {e}")
         return False
 
 def send_email(tweets, screenshots):
@@ -143,25 +177,31 @@ def send_email(tweets, screenshots):
     # Email body
     body = f"""
     <html>
-    <body>
-        <h2>Recent Tweets from @{TWITTER_HANDLE}</h2>
-        <p>Found {len(tweets)} tweets in the last 12 hours:</p>
-        <hr>
+    <body style="font-family: Arial, sans-serif; padding: 20px; background-color: #f5f8fa;">
+        <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 12px;">
+            <h2 style="color: #1DA1F2; margin-bottom: 20px;">📸 Recent Tweets from @{TWITTER_HANDLE}</h2>
+            <p style="color: #666;">Found {len(tweets)} tweets in the last 12 hours:</p>
+            <hr style="border: 1px solid #e1e8ed; margin: 20px 0;">
     """
     
     for i, tweet in enumerate(tweets, 1):
         body += f"""
-        <div style="margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
-            <h3>Tweet #{i}</h3>
-            <p><strong>Posted:</strong> {tweet['created_at']}</p>
-            <p><strong>Text:</strong> {tweet['text']}</p>
-            <p><strong>Likes:</strong> {tweet['likes']} | <strong>Retweets:</strong> {tweet['retweets']}</p>
-            <p><a href="{tweet['url']}">View on Twitter</a></p>
-            <p><em>Screenshot attached below</em></p>
+        <div style="margin: 20px 0; padding: 15px; border: 1px solid #e1e8ed; border-radius: 8px; background-color: #f9fafb;">
+            <h3 style="color: #14171a; margin-top: 0;">Tweet #{i}</h3>
+            <p style="color: #657786; font-size: 14px;"><strong>Posted:</strong> {tweet['created_at']}</p>
+            <p style="color: #14171a; line-height: 1.5;">{tweet['text'][:200]}{'...' if len(tweet['text']) > 200 else ''}</p>
+            <p><a href="{tweet['url']}" style="color: #1DA1F2; text-decoration: none;">🔗 View on Twitter/X</a></p>
+            <p style="color: #999; font-size: 12px;"><em>Screenshot attached below</em></p>
         </div>
         """
     
     body += """
+            <hr style="border: 1px solid #e1e8ed; margin: 20px 0;">
+            <p style="color: #999; font-size: 12px; text-align: center;">
+                Automated by your Twitter Screenshot Bot 🤖<br>
+                Runs every 12 hours automatically
+            </p>
+        </div>
     </body>
     </html>
     """
@@ -181,57 +221,58 @@ def send_email(tweets, screenshots):
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(YOUR_EMAIL, YOUR_EMAIL_PASSWORD)
             server.send_message(msg)
-        print("Email sent successfully!")
+        print("✅ Email sent successfully!")
         return True
     except Exception as e:
-        print(f"Error sending email: {e}")
+        print(f"❌ Error sending email: {e}")
         return False
 
 def main():
     """
     Main function to orchestrate the bot
     """
-    print("=" * 50)
-    print("Twitter Screenshot Bot Starting...")
+    print("=" * 60)
+    print("Twitter Screenshot Bot Starting (Nitter Method)...")
     print(f"Target Account: @{TWITTER_HANDLE}")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 50)
+    print("=" * 60)
     
     # Validate environment variables
-    if not all([YOUR_EMAIL, YOUR_EMAIL_PASSWORD, APIFY_API_TOKEN]):
-        print("ERROR: Missing required environment variables!")
-        print("Required: YOUR_EMAIL, YOUR_EMAIL_PASSWORD, APIFY_API_TOKEN")
+    if not all([YOUR_EMAIL, YOUR_EMAIL_PASSWORD]):
+        print("❌ ERROR: Missing required environment variables!")
+        print("Required: YOUR_EMAIL, YOUR_EMAIL_PASSWORD")
         return
     
-    # Step 1: Get recent tweets
-    tweets = get_recent_tweets(TWITTER_HANDLE, hours=12)
+    # Step 1: Get recent tweets from Nitter
+    tweets = get_recent_tweets_from_nitter(TWITTER_HANDLE, hours=12)
     
     if not tweets:
-        print("No recent tweets found. Exiting.")
+        print("⚠️ No recent tweets found. Exiting.")
         return
     
     # Step 2: Take screenshots
     screenshots = []
-    for i, tweet in enumerate(tweets, 1):
+    for i, tweet in enumerate(tweets[:5], 1):  # Limit to 5 tweets max
         filename = f"tweet_{i}_{tweet['id']}.png"
         if take_screenshot(tweet['url'], filename):
             screenshots.append(filename)
+        time.sleep(2)  # Small delay between screenshots
     
     # Step 3: Send email
     if screenshots:
         send_email(tweets, screenshots)
     else:
-        print("No screenshots captured. Skipping email.")
+        print("⚠️ No screenshots captured. Skipping email.")
     
     # Cleanup: Remove screenshot files
     for screenshot_file in screenshots:
         if os.path.exists(screenshot_file):
             os.remove(screenshot_file)
-            print(f"Cleaned up: {screenshot_file}")
+            print(f"🗑️ Cleaned up: {screenshot_file}")
     
-    print("=" * 50)
-    print("Bot finished successfully!")
-    print("=" * 50)
+    print("=" * 60)
+    print("✅ Bot finished successfully!")
+    print("=" * 60)
 
 if __name__ == "__main__":
     main()
