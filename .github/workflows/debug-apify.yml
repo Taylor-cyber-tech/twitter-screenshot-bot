@@ -1,0 +1,26 @@
+name: Debug Apify Data
+
+on:
+  workflow_dispatch: # Manual trigger only
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install requests
+      run: pip install requests
+    
+    - name: Run Debug Script
+      env:
+        TWITTER_HANDLE: ${{ secrets.TWITTER_HANDLE }}
+        APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
+      run: python debug_apify.py
