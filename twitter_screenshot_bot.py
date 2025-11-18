@@ -54,28 +54,7 @@ def send_email(username, screenshot_file, profile_url):
     msg['To'] = YOUR_EMAIL
     msg['Subject'] = f"Twitter Updates: @{username} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     
-    body = f"""
-    <html>
-    <body style="font-family: Arial, sans-serif; padding: 20px;">
-        <h2 style="color: #1DA1F2;">Recent Tweets from @{username}</h2>
-        <p>Here is a snapshot of their recent activity:</p>
-        
-        <div style="margin: 20px 0; padding: 15px; background-color: #f5f8fa; border-radius: 8px;">
-            <p><strong>Profile:</strong> <a href="{profile_url}">{profile_url}</a></p>
-            <p><strong>Captured:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
-        </div>
-        
-        <p style="color: #666; margin-top: 30px;">
-            Screenshot is attached below. This bot runs automatically every 12 hours.
-        </p>
-        
-        <hr style="border: 1px solid #e1e8ed; margin: 20px 0;">
-        <p style="font-size: 12px; color: #999;">
-            Automated by your Twitter Screenshot Bot
-        </p>
-    </body>
-    </html>
-    """
+    body = """<html><body style="font-family: Arial, sans-serif; padding: 20px;"><h2 style="color: #1DA1F2;">Recent Tweets from @""" + username + """</h2><p>Here is a snapshot of their recent activity:</p><div style="margin: 20px 0; padding: 15px; background-color: #f5f8fa; border-radius: 8px;"><p><strong>Profile:</strong> <a href='""" + profile_url + """'>""" + profile_url + """</a></p><p><strong>Captured:</strong> """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC') + """</p></div><p style="color: #666; margin-top: 30px;">Screenshot is attached below. This bot runs automatically every 12 hours.</p><hr style="border: 1px solid #e1e8ed; margin: 20px 0;"><p style="font-size: 12px; color: #999;">Automated by your Twitter Screenshot Bot</p></body></html>"""
     
     msg.attach(MIMEText(body, 'html'))
     
@@ -85,8 +64,6 @@ def send_email(username, screenshot_file, profile_url):
             img.add_header('Content-Disposition', 'attachment', filename=f'{username}_tweets.png')
             msg.attach(img)
         print("Screenshot attached to email")
-    else:
-        print("No screenshot to attach")
     
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
@@ -107,19 +84,21 @@ def main():
     
     if not all([YOUR_EMAIL, YOUR_EMAIL_PASSWORD]):
         print("ERROR: Missing required environment variables!")
-        print("Required: YOUR_EMAIL, YOUR_EMAIL_PASSWORD")
         return
     
     screenshot_file, profile_url = take_profile_screenshot(TWITTER_HANDLE)
     
     if screenshot_file:
         send_email(TWITTER_HANDLE, screenshot_file, profile_url)
-        
         if os.path.exists(screenshot_file):
             os.remove(screenshot_file)
             print(f"Cleaned up: {screenshot_file}")
     else:
-        print("No screenshot captured, skipping email")
+        print("No screenshot captured")
     
     print("=" * 60)
-    print("Bot finished successfully!"
+    print("Bot finished successfully!")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    main()
